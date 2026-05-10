@@ -1,0 +1,39 @@
+{
+    "name": "qr-cli",
+    "version": "1.0.6",
+    "description": "Node.js CLI that generates styled QR codes via qr-code-styling and returns a JSON envelope containing a base64-encoded PNG/WEBP/JPG or SVG. Accepts options as --key=value flags or a single --json='{...}' blob. Designed to run inside Docker as a sidecar called by other services. See EXAMPLES.md and the Makefile for more info.",
+    "main": "generate.js",
+    "bin": {
+        "qr-cli": "./generate.js"
+    },
+    "engines": {
+        "node": ">=20"
+    },
+    "scripts": {
+        "start": "node generate.js"
+    },
+    "keywords": [
+        "qr",
+        "qr-code",
+        "qr-code-styling",
+        "cli",
+        "docker",
+        "base64",
+        "png",
+        "svg",
+        "webp",
+        "jpg",
+        "jpeg",
+        "dataUrl",
+        "logo",
+        "embedded",
+        "jq"
+    ],
+    "license": "MIT",
+    "dependencies": {
+        "canvas": "^2.11.2",
+        "jsdom": "^24.0.0",
+        "qr-code-styling": "^1.9.2",
+        "sharp": "^0.33.5"
+    }
+}

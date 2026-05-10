@@ -1,0 +1,54 @@
+[build-system]
+requires = ["setuptools>=42", "wheel"]
+build-backend = "setuptools.build_meta"
+
+[project]
+name = "qr-cli-py"
+version = "0.1.0"
+description = "Styled QR code generator backed by qr-code-styling (Docker or Node.js)"
+readme = "README.md"
+license = { text = "MIT" }
+requires-python = ">=3.12"
+
+keywords = ["qr", "qrcode", "qr-code", "styled", "cli", "generator"]
+
+classifiers = [
+  "Development Status :: 4 - Beta",
+  "Intended Audience :: Developers",
+  "License :: OSI Approved :: MIT License",
+  "Programming Language :: Python :: 3",
+  "Programming Language :: Python :: 3.12",
+  "Topic :: Multimedia :: Graphics",
+  "Topic :: Utilities",
+]
+
+dependencies = []
+
+[project.optional-dependencies]
+colour = ["colourmapper-dev"]
+dev    = ["pytest", "pytest-cov", "build", "twine", "ruff", "mypy"]
+
+[project.scripts]
+qr-cli-py = "qr_cli.__main__:main"
+
+[project.urls]
+Homepage   = "https://github.com/rondomondo/qr-cli"
+Repository = "https://github.com/rondomondo/qr-cli"
+
+[tool.setuptools.packages.find]
+where = ["."]
+include = ["qr_cli*"]
+
+[tool.setuptools.package-data]
+"qr_cli.node" = ["index.js", "package.json"]
+
+[tool.pytest.ini_options]
+testpaths = ["tests"]
+pythonpath = ["."]
+
+[tool.ruff]
+line-length = 119
+
+[tool.mypy]
+strict = false
+ignore_missing_imports = true
