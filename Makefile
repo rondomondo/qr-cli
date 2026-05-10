@@ -17,7 +17,7 @@ PYTHON   := python3
 VENV     := .venv
 PIP      := $(VENV)/bin/pip
 
-.PHONY: build build-clean usage shell clean help examples gen-examples skill-examples skill-examples-local skill-install skill-zip demo demo-all
+.PHONY: build build-clean usage shell clean help examples gen-examples skill-examples skill-install skill-zip demo demo-all
 .PHONY: py-install py-install-node py-test py-lint py-build py-publish py-publish-test py-check-backend doctor
 
 help: ## Show this help message
@@ -65,18 +65,14 @@ shell: ## Open an interactive bash shell inside the container
 gen-examples: ## Parse EXAMPLES.md and (re)generate run_examples.sh
 	@python3 scripts/extract_examples.py --project $(PROJECT) --image $(IMAGE):$(TAG)
 
-skill-examples-local: ## Parse EXAMPLES.md and print equivalent /qr for local viewing
-	@python3 scripts/extract_skill_examples.py
-
-examples: gen-examples ## Parse EXAMPLES.md and run all bash examples
+examples: gen-examples ## Run all bash examples from EXAMPLES.md (regenerates run_examples.sh first)
 	@printf "$(GREEN)Generating examples$(RESET)\n"
 	@bash scripts/run_examples.sh
 	@printf "$(BOLD)$(CYAN)Generated images$(RESET)\n"
 	@find assets/images -type f | xargs file
 
-skill-examples: ## Parse EXAMPLES.md and print equivalent /qr skill commands
+skill-examples: ## Print the /qr skill example gallery (ANSI-coloured, ~30 examples)
 	@python3 .claude/skills/qr/scripts/extract_skill_examples.py
-	@$(MAKE) skill-examples-local
 
 
 skill-install: ## Install the /qr skill into ~/.claude/skills/qr/ with Python fallback support

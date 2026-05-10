@@ -2,11 +2,12 @@
 name: qr
 description: >
     Generate styled QR codes via the qr-cli Docker image (or Node fallback when Docker is
-    unavailable). Accepts natural-language descriptions, named colours (resolved via colourmapper),
-    dot/corner style keywords, logo embedding, and raw flags or JSON. Always saves the image to
-    disk and reports where it landed. Use when the user wants to create, generate, or render a QR
-    code for a URL or string. Triggers on phrases like "make a QR code", "generate a QR", "create
-    a QR code for", "QR code this URL", "styled QR", "QR with logo", or when the user types /qr.
+    unavailable). Use this skill whenever the user wants to generate, create, render, or style a
+    QR code -- including /qr, "make a QR code", "QR this URL", "QR with logo", or "styled QR".
+    Accepts natural-language colour names, dot/corner style keywords, logo embedding, and raw
+    flags. Always saves to disk and reports the path.
+
+# Invocation
 argument-hint: '<url> [colour] [on <bg-colour>] [rounded|circles|classy|extra-rounded] [<size>px] [svg|png|jpg|webp] [with logo <url>] [save to <path>] [--backend=docker|node|auto]'
 disable-model-invocation: false
 user-invocable: true
@@ -23,28 +24,21 @@ Always saves the image to disk and reports where it landed.
 All paths below are relative to the skill root (the directory containing this SKILL.md file).
 When installed, that is `~/.claude/skills/qr/`.
 
-- Wrapper:      `./scripts/qr-skill.sh`
+- Wrapper: `./scripts/qr-skill.sh`
 - Docker image: `rondomondo/qr-cli:latest` (primary backend)
-- Python/Node:  `python3 -m qr_cli` (automatic fallback when Docker is unavailable)
+- Python/Node: `python3 -m qr_cli` (automatic fallback when Docker is unavailable)
 
 ### Backend selection
 
 The wrapper selects a backend automatically (Docker first, Node fallback):
 
-| Situation                        | Backend used                  |
-|----------------------------------|-------------------------------|
-| Docker running (default)         | `docker run rondomondo/qr-cli` |
-| Docker unavailable (sandbox/CI)  | `python3 -m qr_cli --backend=node` |
-| `--backend=docker` forced        | Docker (errors if not running) |
-| `--backend=node` forced          | Python/Node always             |
-| `QR_BACKEND=node` env var        | Python/Node always             |
-
-The Node backend is bundled with the `qr-cli` Python package. Pre-install its
-Node dependencies once with:
-
-```bash
-python3 -m qr_cli --install
-```
+| Situation                       | Backend used                       |
+| ------------------------------- | ---------------------------------- |
+| Docker running (default)        | `docker run rondomondo/qr-cli`     |
+| Docker unavailable (sandbox/CI) | `python3 -m qr_cli --backend=node` |
+| `--backend=docker` forced       | Docker (errors if not running)     |
+| `--backend=node` forced         | Python/Node always                 |
+| `QR_BACKEND=node` env var       | Python/Node always                 |
 
 ### colourmapper (required for named colour resolution)
 
@@ -55,6 +49,91 @@ pip install -i https://pypi.org/simple/ colourmapper-dev
 The wrapper calls `python3 -m colourmapper.cm <name>` and falls back gracefully
 to the raw value if the package is not installed.
 
+---
+
+## Node backend bootstrap (sandboxed / no-Docker environments)
+
+> **When does this apply?**
+> In sandboxed environments (e.g. Claude's own execution sandbox, CI runners,
+> airgapped machines) Docker is unavailable and `python3 -m qr_cli --install`
+> also fails -- because the `canvas` npm package tries to compile itself and
+> download Node.js C++ headers from `nodejs.org`, which is typically blocked.
+>
+> The bootstrap script solves this entirely without any network access beyond
+> PyPI and the Ubuntu package mirror.
+
+### What the bootstrap does
+
+1. Installs `qr-cli` and `colourmapper-dev` from PyPI
+2. Installs system libs (`libcairo2-dev`, `libpango1.0-dev`, `librsvg2-dev`,
+   `libjpeg-dev`, `libgif-dev`) via apt -- these are the native dependencies
+   for the `canvas` npm package
+3. Compiles `canvas` using **system Node headers** at `/usr/include/node/`
+   via `npm_config_nodedir=/usr` -- completely avoids the `nodejs.org` download
+4. Installs `jsdom` (needed for `qr-code-styling`'s DOM rendering in Node)
+5. Drops in `./scripts/index.js` (the patched version) which contains three
+   fixes discovered through debugging (see patch notes below)
+
+### Running the bootstrap
+
+```bash
+bash ./.claude/skills/qr/scripts/bootstrap_node_backend.sh
+```
+
+The script is **idempotent** -- safe to re-run after `qr-cli` upgrades or
+reinstalls. It checks what's already in place and only does what's needed.
+
+A smoke test runs at the end to confirm everything works.
+
+### Patch notes (why index.js is patched)
+
+Three bugs exist in the upstream `qr-cli` Node backend that only manifest in
+sandboxed environments. The patched `./scripts/index.js` fixes all three:
+
+**Patch 1 — JSDOM network hang**
+`qr-code-styling` calls `new jsdom("", { resources: "usable" })` internally.
+The `resources: "usable"` option tells jsdom to fetch external resources over
+the network, which hangs indefinitely when the network is restricted.
+Fix: subclass JSDOM to strip the `resources` key before calling `super()`.
+
+**Patch 2 — canvas + jsdom wiring**
+The original index.js used a partial `global.document` shim that only stubbed
+`createElement`, not `createElementNS`. `qr-code-styling` needs a full SVG DOM.
+Fix: pass `jsdom: JSDOM` and `nodeCanvas: { createCanvas, loadImage }` directly
+to the `QRCodeStyling` constructor (which supports this natively).
+
+**Patch 3 — stdin blocking**
+When `python3 -m qr_cli` runs Node via `subprocess` with captured stdout,
+stdin is not a TTY. The original index.js unconditionally called
+`fs.readFileSync("/dev/stdin")` which blocks forever waiting for input.
+Fix: only attempt the stdin read when `--data` and `--json` flags are absent.
+
+---
+
+## Auto-bootstrap in execution flow
+
+**Claude should auto-bootstrap before the first Node backend attempt**, rather
+than waiting for it to fail. The execution steps below include this check.
+
+Detection: the Node backend needs bootstrapping if the compiled canvas binary is missing:
+
+```bash
+python3 -c "
+import importlib.util, os, sys
+spec = importlib.util.find_spec('qr_cli')
+if not spec: sys.exit(1)
+canvas = os.path.join(os.path.dirname(spec.origin), 'node/node_modules/canvas/build/Release/canvas.node')
+sys.exit(0 if os.path.exists(canvas) else 1)
+" 2>/dev/null
+```
+
+This is a fast file-existence check (no network, no QR generation). On macOS use `otool -L` to
+inspect the binary if needed; `ldd` is Linux-only.
+
+In practice: **if Docker is not available, run the bootstrap first, then generate.**
+
+---
+
 ## How to invoke
 
 When the user types `/qr <anything>`, parse their intent and call the wrapper.
@@ -63,20 +142,15 @@ Never ask clarifying questions for reasonable defaults -- just pick them and say
 ### Examples mode
 
 If the user types `/qr examples`, `/qr show examples`, `/qr show me the examples`,
-or any phrase asking to see skill examples, try to show the most richest formatted output
-you can, and to access the rich examples run:
+or any phrase asking to see skill examples, run:
 
 ```bash
 python3 ./scripts/extract_skill_examples.py
 ```
 
 Print the output verbatim (it includes ANSI colour codes that the terminal renders).
-Do not call the wrapper or generate any QR code. There are sample qr code images in the 
-./assets/ sub directory 
-
-Remember that in the ./docs directory there is an EXAMPLES.md file  `./docs/EXAMPLES.md`
-and a README `./docs/README.md`
-
+Do not call the wrapper or generate any QR code. Sample images are in `./assets/`; extended
+docs are at `./docs/EXAMPLES.md` and `./docs/README.md`.
 
 ### Help mode
 
@@ -112,7 +186,9 @@ FLAGS (raw passthrough also works)
   --border=      pixel border (default 10)
   --margin=      quiet zone (default 0)
   --project=     namespaces output as assets/images/<name>/qr.<ext>
-  --image=       logo URL to embed in centre
+  --image=       <url|path> logo URL to embed in centre
+                            (URLs are pre-fetched to a local temp file before
+                            generation to avoid sandbox network restrictions)
   --dotsOptions.type=
   --cornersSquareOptions.type=
   --qrOptions.errorCorrectionLevel=  L | M | Q | H
@@ -130,40 +206,40 @@ If the user says "dark" / "light" without specifying a colour, default to
 
 ### Dot style shortcuts (map natural language to --dotsOptions.type)
 
-| User says              | Flag value        |
-|------------------------|-------------------|
-| round / rounded        | `rounded`         |
-| circle / circles       | `dots`            |
-| classy                 | `classy`          |
-| classy round / elegant | `classy-rounded`  |
-| extra round / bubbly   | `extra-rounded`   |
-| square (default)       | `square`          |
+| User says              | Flag value       |
+| ---------------------- | ---------------- |
+| round / rounded        | `rounded`        |
+| circle / circles       | `dots`           |
+| classy                 | `classy`         |
+| classy round / elegant | `classy-rounded` |
+| extra round / bubbly   | `extra-rounded`  |
+| square (default)       | `square`         |
 
 ### Corner style shortcuts (--cornersSquareOptions.type)
 
-| User says              | Flag value        |
-|------------------------|-------------------|
-| round corners          | `extra-rounded`   |
-| dot corners            | `dot`             |
-| square corners         | `square`          |
+| User says      | Flag value      |
+| -------------- | --------------- |
+| round corners  | `extra-rounded` |
+| dot corners    | `dot`           |
+| square corners | `square`        |
 
 ### Error correction shortcuts (--qrOptions.errorCorrectionLevel)
 
-| User says                           | Level |
-|-------------------------------------|-------|
-| low / small / fast                  | `L`   |
-| medium / normal                     | `M`   |
-| standard / default (omit)           | `Q`   |
-| high / logo / image / best          | `H`   |
+| User says                  | Level |
+| -------------------------- | ----- |
+| low / small / fast         | `L`   |
+| medium / normal            | `M`   |
+| standard / default (omit)  | `Q`   |
+| high / logo / image / best | `H`   |
 
 ### Format shortcuts
 
-| User says          | --format |
-|--------------------|----------|
-| svg / vector       | `svg`    |
-| jpg / jpeg         | `jpg`    |
-| webp               | `webp`   |
-| png (default)      | `png`    |
+| User says     | --format |
+| ------------- | -------- |
+| svg / vector  | `svg`    |
+| jpg / jpeg    | `jpg`    |
+| webp          | `webp`   |
+| png (default) | `png`    |
 
 ## Wrapper flags reference
 
@@ -173,7 +249,7 @@ If the user says "dark" / "light" without specifying a colour, default to
 --width=<px>                  width in pixels (default: 300)
 --height=<px>                 height in pixels (default: 300)
 --border=<px>                 pixel border around QR (default: 10)
---margin=<px>                 quiet zone (default: 0)
+--margin=<px>                 quiet zone (default 0)
 --project=<name>              namespaces output as assets/images/<name>/qr.<ext>
 --dotsOptions.type=<style>    dot shape (see table above)
 --dotsOptions.color=<hex>     dot colour (use --dots-color= for name resolution)
@@ -195,50 +271,97 @@ If the user says "dark" / "light" without specifying a colour, default to
 ## Execution steps
 
 1. Parse the user's request (natural language, flags, or JSON blob).
-2. Resolve colour names using the wrapper's `--dots-color=` / `--bg-color=` etc.
-3. Set sensible defaults for anything not specified:
-   - format: `png`, width/height: `300`, border: `10`, margin: `0`
-   - dots style: `rounded` (nicer default than `square`)
-   - error correction: omit (library default `Q`) unless a logo is present, then use `H`
-   - project: `default` if the user does not name one
-4. Build the structured save path before calling the wrapper:
-   - Pattern: `assets/images/{project}/{width}x{height}_{dotscolor}_{bgcolor}_{project}.{format}`
-   - Strip the leading `#` from hex colours in the filename (e.g. `0504aa` not `#0504aa`).
-     Use the raw colour name if hex is not yet known (it gets resolved inside the wrapper).
-   - Example: `assets/images/default/300x300_royalblue_cream_default.png`
-   - Pass it via `--save-to=<path>` so the wrapper writes there.
-5. Run the wrapper using its absolute path (Claude Code's working directory is the project root, not the skill root):
-   ```bash
-   bash ./.claude/skills/qr/scripts/qr-skill.sh \
-     --save-to="assets/images/default/300x300_royalblue_cream_default.png" \
-     [other args...]
-   ```
-   The wrapper auto-selects Docker if available, otherwise falls back to `python3 -m qr_cli`
-   (Node backend). Pass `--backend=node` to force the fallback explicitly (e.g. in sandboxes
-   where Docker-in-Docker is not available). The `QR_BACKEND` env var is an alternative.
-6. Parse the JSON result.
-7. Open the saved image with:
-   ```bash
-   open <save-to path>
-   ```
-8. Report back clearly:
-   - Saved to: `<path>`
-   - Format / size / dimensions
-   - Colours used (with resolved names if colourmapper matched)
-   - Generation time
-   - Any error from `.error`
 
-## Example invocations (what the wrapper call looks like)
+2. **Check backend availability:**
+    - Try `docker info` -- if Docker is available, proceed to step 3 with Docker.
+    - If Docker is unavailable, check if the Node backend is bootstrapped with:
+
+        ```bash
+        # canvas will exist if we have been bootstrapped
+        python3 -c "
+        import importlib.util, os, sys
+        spec = importlib.util.find_spec('qr_cli')
+        if not spec: sys.exit(1)
+        canvas = os.path.join(os.path.dirname(spec.origin), 'node/node_modules/canvas/build/Release/canvas.node')
+        sys.exit(0 if os.path.exists(canvas) else 1)
+        " 2>/dev/null
+        ```
+
+    - If that fails or times out, **run bootstrap first**:
+        ```bash
+        bash ./.claude/skills/qr/scripts/bootstrap_node_backend.sh
+        ```
+    - After bootstrap, use `python3 -m qr_cli --backend=node` directly (not
+      qr-skill.sh) because qr-skill.sh's base64 decode step is incompatible
+      with the Node backend's save-to handling. See note below.
+
+2b. **If a logo image URL is supplied (`--image=<url>`):** - Use the `web_fetch` tool to download the image to a temp local path:
+`/tmp/qr_logo_<random_suffix>.<ext>` (infer extension from URL or Content-Type). - Replace the `--image=<url>` argument with `--image=file:///tmp/qr_logo_<...>.<ext>`
+(for Docker) or the bare local path (for Node backend, which accepts filesystem paths). - If the fetch fails (network blocked, 4xx/5xx), warn the user and continue
+without the logo rather than aborting. - Bump error correction to `H` if not already set (logo occludes part of the code). - Clean up the temp file after generation completes.
+
+3. Resolve colour names using the wrapper's `--dots-color=` / `--bg-color=` etc.
+
+4. Set sensible defaults for anything not specified:
+    - format: `png`, width/height: `300`, border: `10`, margin: `10`
+    - dots style: `rounded` (nicer default than `square`)
+    - error correction: omit (library default `Q`) unless a logo is present, then use `H`
+    - project: `default` if the user does not name one
+
+5. Build the structured save path before calling:
+    - Pattern: `assets/images/{project}/{width}x{height}_{dotscolor}_{bgcolor}_{project}.{format}`
+    - Strip the leading `#` from hex colours in the filename (e.g. `0504aa` not `#0504aa`).
+      Use the raw colour name if hex is not yet known.
+    - Example: `assets/images/default/300x300_royalblue_cream_default.png`
+
+6. **Run the appropriate command:**
+
+    **Docker available** — use qr-skill.sh as normal:
+
+    ```bash
+    bash ./.claude/skills/qr/scripts/qr-skill.sh \
+      --data="<url>" \
+      --save-to="assets/images/default/300x300_000000_ffffff_default.png" \
+      [other args...]
+    ```
+
+    **Node backend (no Docker)** — call python3 -m qr_cli directly with --save-to:
+
+    ```bash
+    python3 -m qr_cli --backend=node \
+      --data="<url>" \
+      --format=png \
+      --dotsOptions.type=rounded \
+      --save-to="assets/images/default/300x300_000000_ffffff_default.png"
+    ```
+
+    > **Why not qr-skill.sh for Node?** qr-skill.sh strips `--save-to` and tries
+    > to decode `base64` from the JSON output. The Node backend via python3 -m qr_cli
+    > strips base64 before stdout (it saves the file itself). These two behaviours
+    > are incompatible. Calling python3 -m qr_cli directly with `--save-to` works
+    > correctly and emits `_skill.saved_to` in the result JSON.
+
+7. Parse the JSON result.
+
+8. Report back clearly:
+    - Saved to: `<path>` (use `_skill.saved_to` if present, else the path you passed)
+    - Format / size / dimensions
+    - Colours used (with resolved names if colourmapper matched)
+    - Generation time
+    - Backend used (Docker or Node)
+    - Any error from `.error`
+
+## Example invocations
 
 ```bash
 SKILL=./.claude/skills/qr/scripts/qr-skill.sh
 
-# Minimal (project defaults to "default")
+# Docker: minimal
 bash "$SKILL" \
   --data="https://example.com" \
   --save-to="assets/images/default/300x300_000000_ffffff_default.png"
 
-# Natural colour names, rounded style
+# Docker: natural colour names, rounded style
 bash "$SKILL" \
   --data="https://example.com" \
   --dotsOptions.type=rounded \
@@ -247,7 +370,7 @@ bash "$SKILL" \
   --save-to="assets/images/default/300x300_royalblue_cream_default.png" \
   --border=10 --margin=10
 
-# With a logo (bumps error correction to H automatically)
+# Docker: with a logo (bumps error correction to H automatically)
 bash "$SKILL" \
   --data="https://example.com" \
   --dotsOptions.type=extra-rounded \
@@ -261,22 +384,20 @@ bash "$SKILL" \
   --imageOptions.margin=10 \
   --format=png --width=500 --height=500
 
-# SVG vector output
-bash "$SKILL" \
+# Node (no Docker): direct python3 -m qr_cli call
+python3 -m qr_cli --backend=node \
   --data="https://example.com" \
-  --format=svg \
+  --format=webp \
   --dotsOptions.type=rounded \
-  --dots-color="slate blue" \
-  --bg-color="white"
+  --border=10 \
+  --save-to="assets/images/default/300x300_000000_ffffff_default.webp"
 
-# Custom save path
-bash "$SKILL" \
+# Node (no Docker): bootstrap first if needed, then generate
+bash ./.claude/skills/qr/scripts/bootstrap_node_backend.sh
+python3 -m qr_cli --backend=node \
   --data="https://example.com" \
-  --save-to="/tmp/my-qr.png"
-
-# Pass raw JSON blob (useful for complex gradient configs)
-bash "$SKILL" \
-  --json='{"data":"https://example.com","format":"png","dotsOptions":{"type":"rounded","color":"#0255c7"},"backgroundOptions":{"color":"#fdfbd4"}}'
+  --format=png \
+  --save-to="assets/images/default/300x300_000000_ffffff_default.png"
 ```
 
 ## What to report after generation
@@ -296,7 +417,7 @@ QR code generated and saved.
   Generated:   42 ms
 ```
 
-If the Node fallback was used (Docker unavailable), say so clearly -- e.g. "Generated via Node backend (Docker not available in this environment)."
+If the Node fallback was used (Docker unavailable), say so clearly.
 
 Always append a fenced code block after the summary so the user can copy the
 `open` command directly from the VS Code copy button:
@@ -307,20 +428,28 @@ open assets/images/default/300x300_0504aa_ffffc2_default.png
 ```
 ````
 
-Use the exact relative path from `_skill.saved_to` (no `cd` prefix needed --
-the user can paste this straight into a terminal from the repo root).
+Use `_skill.saved_to` from the JSON result as the path (Docker path), or the
+`--save-to` value you passed (Node path, since `_skill.saved_to` is set by
+python3 -m qr_cli when `--save-to` is provided).
 
 Rules for the link:
-- Use the relative path from `_skill.saved_to` as both the link text and the href.
-- The path is already relative to the working directory (e.g. `assets/images/default/300x300_0504aa_ffffc2_default.png`).
+
+- Use the relative path as both the link text and the href.
 - Format: `[<relative_path>](<relative_path>)`
 - Never use `file://` URIs -- they are not clickable in VS Code.
 
-The `base64` field is stripped from the JSON by the wrapper before it is returned,
-so do not reference or display it. If the user explicitly asks to see the base64
-data, re-run with `--no-save` and parse the raw docker output directly.
+If an error occurs, show the `.error` field from the JSON and suggest a fix based on the
+common causes below:
 
-If an error occurs, show the `.error` field from the JSON and suggest a fix.
+| Symptom                                    | Likely cause                      | Fix                                                                        |
+| ------------------------------------------ | --------------------------------- | -------------------------------------------------------------------------- |
+| `Cannot connect to the Docker daemon`      | Docker not running                | Start Docker Desktop, or use `--backend=node`                              |
+| `canvas.node: no such file or directory`   | Node backend not bootstrapped     | Run `bootstrap_node_backend.sh`                                            |
+| `colour not found` / unexpected hex result | Colour name too obscure           | Try a simpler name or pass hex directly                                    |
+| `canvas` compile error during bootstrap    | Missing system libs               | Check apt output; re-run bootstrap                                         |
+| Hangs indefinitely on Node backend         | jsdom network access blocked      | Ensure patched `index.js` is in place                                      |
+| `format not supported`                     | Backend/format mismatch           | SVG requires Docker; use `--format=png` for Node                           |
+| fetch failed for logo URL                  | Network sandbox blocks the domain | Claude pre-fetches via web_fetch tool; if that also fails, logo is skipped |
 
 ## Colour name tips
 

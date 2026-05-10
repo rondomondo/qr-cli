@@ -4,7 +4,7 @@ Run directly:  python3 scripts/extract_skill_examples.py
 Invoked by:   /qr examples
 """
 
-# ── ANSI palette ────────────────────────────────────────────────────────────
+# -- ANSI palette ------------------------------------------------------------
 RESET  = "\033[0m"
 BOLD   = "\033[1m"
 DIM    = "\033[2m"
@@ -38,7 +38,7 @@ BRIGHT_MAGENTA = "\033[95m"
 BRIGHT_CYAN    = "\033[96m"
 BRIGHT_WHITE   = "\033[97m"
 
-# ── Example data ─────────────────────────────────────────────────────────────
+# -- Example data -------------------------------------------------------------
 # Each group: { "title": str, "note": str|None, "examples": [(label, cmd)] }
 
 GROUPS = [
@@ -121,7 +121,7 @@ GROUPS = [
                 (
                     "/qr https://browserleaks.com/geo extra-rounded #185FA5 on #E6F1FB "
                     "round corners dot corner dots standard error correction jpg 600px "
-                    "with logo https://lh3.googleusercontent.com/a/ACg8ocKb-ORzjTWx7hwb7G9s83RNjlG8yFC5Hnr_h7oRIcc1iT7FxNo=s96-c"
+                    "with logo https://i.imgur.com/IKGBe9H.png"
                 ),
             ),
         ],
@@ -138,12 +138,12 @@ GROUPS = [
     },
 ]
 
-# ── Rendering helpers ────────────────────────────────────────────────────────
+# -- Rendering helpers --------------------------------------------------------
 
 WIDTH = 78  # terminal column target
 
 
-def hr(char="─", colour=DIM):
+def hr(char="-", colour=DIM):
     return f"{colour}{char * WIDTH}{RESET}"
 
 
@@ -182,7 +182,7 @@ def render_cmd(cmd: str, is_heredoc: bool = False) -> str:
     return "\n".join(out)
 
 
-# ── Main ──────────────────────────────────────────────────────────────────────
+# -- Main ----------------------------------------------------------------------
 
 def main():
     total = sum(len(g["examples"]) for g in GROUPS)

@@ -428,7 +428,7 @@ docker run --rm qr-cli:latest \
     "format": "jpg",
     "project": "daveco",
     "border": 10,
-    "image": "https://lh3.googleusercontent.com/a/ACg8ocKb-ORzjTWx7hwb7G9s83RNjlG8yFC5Hnr_h7oRIcc1iT7FxNo=s96-c",
+    "image": "https://i.imgur.com/IKGBe9H.png",
     "imageOptions": {
       "crossOrigin": "anonymous",
       "margin": 10

@@ -80,15 +80,27 @@ make skill-examples
 
 | Target | Description |
 |---|---|
-| `make build` | Build the Docker image (`$(DOCKER_REPO)/qr-cli:latest`) |
+| `make build` | Build the Docker image (`rondomondo/qr-cli:latest`) |
 | `make build-clean` | Build with `--no-cache` |
 | `make usage` | Show the generator's `--help` output as pretty-printed JSON |
 | `make shell` | Open an interactive bash shell inside the container |
 | `make gen-examples` | Parse `EXAMPLES.md` and regenerate `scripts/run_examples.sh` |
 | `make examples` | Regenerate `scripts/run_examples.sh` then run all examples |
-| `make skill-examples` | Print the `/qr` skill equivalent of every example in `EXAMPLES.md` |
-| `make skill-install` | Install the `/qr` skill into `~/.claude/skills/qr/` |
-| `make clean` | Remove the Docker image and build artefacts |
+| `make skill-examples` | Print the `/qr` skill example gallery (ANSI-coloured, ~30 examples) |
+| `make skill-install` | Install the `/qr` skill into `~/.claude/skills/qr/` with Python fallback support |
+| `make skill-zip` | Zip `.claude/skills/qr/` into `.claude/skills/qr.zip` |
+| `make doctor` | Show environment info useful for bug reports |
+| `make venv` | Create Python virtual environment (if absent) |
+| `make py-install` | Install qr-cli in editable mode (Docker primary, Node fallback) |
+| `make py-install-node` | Pre-install bundled Node deps for the Node backend fallback |
+| `make py-test` | Run Python package tests |
+| `make py-lint` | Lint `qr_cli/` with ruff |
+| `make py-build` | Build sdist + wheel ready for upload |
+| `make py-publish` | Upload release to PyPI |
+| `make py-check-backend` | Report which backend qr-cli will use in this environment |
+| `make demo` | Regenerate terminal demo GIF for `TAPE=<file>` (default: `demo.tape`) |
+| `make demo-all` | Regenerate terminal demo GIFs for all `*.tape` files in `demo/` |
+| `make clean` | Remove Docker image, build artefacts, caches, and temp files |
 
 ---
 
@@ -464,8 +476,9 @@ that lets you generate QR codes in plain English directly from the chat panel.
 
 ### Setup
 
-The skill file lives at `~/.claude/skills/qr/skill.md`. Copy or symlink it there
-and Claude Code will pick it up automatically.
+The skill files live at `./.claude/skills/qr`. Run `make skill-install` to copy
+them to `~/.claude/skills/qr/` -- Claude Code will pick them up automatically.
+There is also a zipped version at `./.claude/skills/qr.zip` for convenience.
 
 ### Usage
 
@@ -574,7 +587,7 @@ example in `EXAMPLES.md`.
 | Script | Purpose |
 |---|---|
 | `scripts/extract_examples.py` | Parses `EXAMPLES.md`, extracts every `bash` fenced block, and writes `run_examples.sh` with `[N/total]` progress labels. Re-run via `make gen-examples` after editing `EXAMPLES.md`. |
-| `scripts/extract_skill_examples.py` | Parses `EXAMPLES.md` and prints the equivalent `/qr` skill command for each Docker example, together with a natural-language shorthand. Run via `make skill-examples`. |
+| `.claude/skills/qr/scripts/extract_skill_examples.py` | Prints a formatted gallery of `/qr` skill examples with ANSI colour. Invoked by `make skill-examples` and by the skill itself when you type `/qr examples`. |
 
 ---
 
