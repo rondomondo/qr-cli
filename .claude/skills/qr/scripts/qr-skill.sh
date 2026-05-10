@@ -12,10 +12,18 @@
 #   --bg-color=<name|hex>
 #   --corners-color=<name|hex>
 #   --corner-dot-color=<name|hex>
-#   --save-to=<path>          override output file path
+#   --save-to=<path>          override output file path (host path)
 #   --no-save                 skip writing to disk (stdout JSON only)
 #   --image-tag=<tag>         docker image tag (default: rondomondo/qr-cli:latest)
 #   --backend=docker|node|auto  force backend (default: auto)
+#
+# Docker backend behaviour:
+#   - Mounts ./output as /output inside the container; images are written there
+#     directly by the container (no base64 decode on the host).
+#   - Logo URLs are passed straight through to the container -- Docker runs
+#     locally so there are no sandbox network restrictions.
+#   - --save-to is rewritten to a /output/... path inside the container;
+#     the host path is reconstructed from the same relative name.
 
 set -euo pipefail
 
@@ -92,10 +100,46 @@ final_args=("${pass_through[@]}")
 # Run qr-cli — Docker primary, Python/Node fallback when Docker is unavailable
 _docker_available() { docker info >/dev/null 2>&1; }
 
-if [[ "$BACKEND" == "node" ]] || { [[ "$BACKEND" == "auto" ]] && ! _docker_available; }; then
-    raw=$(python3 -m qr_cli --backend=node "${final_args[@]}" 2>/dev/null)
+_use_node() {
+    [[ "$BACKEND" == "node" ]] || { [[ "$BACKEND" == "auto" ]] && ! _docker_available; }
+}
+
+if _use_node; then
+    # Node path: python3 -m qr_cli handles saving itself via --save-to
+    if [[ "$no_save" == false && -z "$save_to" ]]; then
+        save_to="output/qr.png"
+    fi
+    [[ -n "$save_to" ]] && mkdir -p "$(dirname "$save_to")"
+    node_args=("${final_args[@]}")
+    [[ "$no_save" == false && -n "$save_to" ]] && node_args+=("--save-to=${save_to}")
+    raw=$(python3 -m qr_cli --backend=node "${node_args[@]}" 2>/dev/null)
+
 elif [[ "$BACKEND" == "docker" ]] || _docker_available; then
-    raw=$(docker run --rm "$IMAGE_TAG" "${final_args[@]}" 2>/dev/null)
+    # Docker path: mount ./output as /output inside the container.
+    # The container writes the image directly -- no base64 decode on the host.
+    # Logo URLs are passed through unchanged (local Docker has unrestricted network access).
+    output_dir="$(pwd)/output"
+    mkdir -p "$output_dir"
+
+    # Determine the in-container save path from --save-to (host path) or use a default.
+    if [[ "$no_save" == false ]]; then
+        if [[ -n "$save_to" ]]; then
+            # Strip a leading "output/" prefix if present so the path works inside the container.
+            container_rel="${save_to#output/}"
+            container_save="/output/${container_rel}"
+            host_save="${output_dir}/${container_rel}"
+        else
+            container_save="/output/qr.png"
+            host_save="${output_dir}/qr.png"
+        fi
+        final_args+=("--save-to=${container_save}")
+        save_to="$host_save"
+    fi
+
+    raw=$(docker run --rm \
+        -v "${output_dir}:/output" \
+        "$IMAGE_TAG" \
+        "${final_args[@]}" 2>/dev/null)
 else
     echo '{"success":false,"error":"Docker is not running and python3 -m qr_cli (Node fallback) is unavailable. Run: pip install qr-cli && python3 -m qr_cli --install"}' >&2
     exit 1
@@ -108,26 +152,31 @@ if [[ "$success" != "True" ]]; then
     exit 1
 fi
 
-# Optionally save to disk
+# For the Node path, decode base64 to disk (python3 -m qr_cli may return base64 without saving
+# when --save-to is not supported by the installed version). For Docker, the file is already on
+# disk via the volume mount -- only inject metadata.
 if [[ "$no_save" == false ]]; then
-    # Use --save-to, else fall back to meta.image.filename, else qr.<ext>
-    if [[ -z "$save_to" ]]; then
-        save_to=$(echo "$raw" | python3 -c "import sys,json; d=json.load(sys.stdin); print(d['image']['filename'])" 2>/dev/null) || save_to="qr.png"
-    fi
-    mkdir -p "$(dirname "$save_to")"
-    echo "$raw" | python3 -c "
+    has_file=false
+    [[ -f "$save_to" ]] && has_file=true
+
+    if [[ "$has_file" == false ]]; then
+        # Fallback: decode base64 from JSON (Node backend or older Docker image)
+        mkdir -p "$(dirname "$save_to")"
+        echo "$raw" | python3 -c "
 import sys, json, base64, pathlib
 d = json.load(sys.stdin)
 pathlib.Path(sys.argv[1]).write_bytes(base64.b64decode(d['image']['base64']))
 " "$save_to"
+    fi
 
-    # Inject resolved colours and save path into the output for the skill to report.
-    # Strip base64 payload -- it has already been written to disk and is too large to display.
+    # Strip base64 payload and inject skill metadata for the skill to report.
     enriched=$(echo "$raw" | python3 -c "
 import sys, json
 d = json.load(sys.stdin)
 if 'image' in d and 'base64' in d['image']:
     del d['image']['base64']
+if 'image' in d and 'dataUri' in d['image']:
+    del d['image']['dataUri']
 d['_skill'] = {
     'saved_to': sys.argv[1],
     'dots_color_resolved':        sys.argv[2] or None,

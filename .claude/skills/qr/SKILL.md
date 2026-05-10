@@ -288,17 +288,29 @@ If the user says "dark" / "light" without specifying a colour, default to
         ```
 
     - If that fails or times out, **run bootstrap first**:
-        ```bash
-        bash ./.claude/skills/qr/scripts/bootstrap_node_backend.sh
-        ```
+
+    Before running the bootstrap, emit a message to the user:
+    "⚙️ One-time setup in progress — compiling the QR rendering engine against system
+    libraries (no Docker in this environment). This takes ~30–40 seconds and only happens once.
+    Hang tight…"
+
+    Then run the bootstrap.
+    `bash
+    bash ./.claude/skills/qr/scripts/bootstrap_node_backend.sh
+    `
     - After bootstrap, use `python3 -m qr_cli --backend=node` directly (not
       qr-skill.sh) because qr-skill.sh's base64 decode step is incompatible
       with the Node backend's save-to handling. See note below.
 
-2b. **If a logo image URL is supplied (`--image=<url>`):** - Use the `web_fetch` tool to download the image to a temp local path:
-`/tmp/qr_logo_<random_suffix>.<ext>` (infer extension from URL or Content-Type). - Replace the `--image=<url>` argument with `--image=file:///tmp/qr_logo_<...>.<ext>`
-(for Docker) or the bare local path (for Node backend, which accepts filesystem paths). - If the fetch fails (network blocked, 4xx/5xx), warn the user and continue
-without the logo rather than aborting. - Bump error correction to `H` if not already set (logo occludes part of the code). - Clean up the temp file after generation completes.
+2b. **If a logo image URL is supplied (`--image=<url>`):**
+    - **Docker backend:** pass the URL through unchanged. Docker runs locally and has
+      unrestricted network access, so the container fetches it directly. No pre-fetch needed.
+    - **Node backend (no Docker / sandbox):** use the `web_fetch` tool to download the image
+      to a temp local path `/tmp/qr_logo_<random_suffix>.<ext>` (infer extension from URL or
+      Content-Type), then replace `--image=<url>` with the bare local path.
+      If the fetch fails (network blocked, 4xx/5xx), warn the user and continue without the
+      logo rather than aborting. Clean up the temp file after generation completes.
+    - Bump error correction to `H` if not already set (logo occludes part of the code).
 
 3. Resolve colour names using the wrapper's `--dots-color=` / `--bg-color=` etc.
 
@@ -309,37 +321,40 @@ without the logo rather than aborting. - Bump error correction to `H` if not alr
     - project: `default` if the user does not name one
 
 5. Build the structured save path before calling:
-    - Pattern: `assets/images/{project}/{width}x{height}_{dotscolor}_{bgcolor}_{project}.{format}`
+    - **Docker backend:** images are written into `./output/` on the host (the wrapper mounts
+      it as `/output` inside the container). Pass `--save-to` as a path relative to `output/`,
+      e.g. `output/{project}/{width}x{height}_{dotscolor}_{bgcolor}_{project}.{format}`.
+      The wrapper translates this to `/output/...` for the container automatically.
+    - **Node backend:** pass `--save-to` directly; the wrapper saves there.
+    - Pattern: `output/{project}/{width}x{height}_{dotscolor}_{bgcolor}_{project}.{format}`
     - Strip the leading `#` from hex colours in the filename (e.g. `0504aa` not `#0504aa`).
       Use the raw colour name if hex is not yet known.
-    - Example: `assets/images/default/300x300_royalblue_cream_default.png`
+    - Example: `output/default/300x300_royalblue_cream_default.png`
 
 6. **Run the appropriate command:**
 
-    **Docker available** — use qr-skill.sh as normal:
+    **Docker available** — use qr-skill.sh (volume mount handled inside the wrapper):
 
     ```bash
     bash ./.claude/skills/qr/scripts/qr-skill.sh \
       --data="<url>" \
-      --save-to="assets/images/default/300x300_000000_ffffff_default.png" \
+      --save-to="output/default/300x300_000000_ffffff_default.png" \
       [other args...]
     ```
 
-    **Node backend (no Docker)** — call python3 -m qr_cli directly with --save-to:
+    The wrapper mounts `./output` as `/output` in the container, rewrites `--save-to` to
+    `/output/default/300x300_000000_ffffff_default.png`, and the file lands at
+    `./output/default/300x300_000000_ffffff_default.png` on the host.
+
+    **Node backend (no Docker)** — qr-skill.sh also handles this path correctly now:
 
     ```bash
-    python3 -m qr_cli --backend=node \
+    bash ./.claude/skills/qr/scripts/qr-skill.sh --backend=node \
       --data="<url>" \
       --format=png \
       --dotsOptions.type=rounded \
-      --save-to="assets/images/default/300x300_000000_ffffff_default.png"
+      --save-to="output/default/300x300_000000_ffffff_default.png"
     ```
-
-    > **Why not qr-skill.sh for Node?** qr-skill.sh strips `--save-to` and tries
-    > to decode `base64` from the JSON output. The Node backend via python3 -m qr_cli
-    > strips base64 before stdout (it saves the file itself). These two behaviours
-    > are incompatible. Calling python3 -m qr_cli directly with `--save-to` works
-    > correctly and emits `_skill.saved_to` in the result JSON.
 
 7. Parse the JSON result.
 
@@ -356,10 +371,10 @@ without the logo rather than aborting. - Bump error correction to `H` if not alr
 ```bash
 SKILL=./.claude/skills/qr/scripts/qr-skill.sh
 
-# Docker: minimal
+# Docker: minimal (image saved to ./output/default/qr.png via volume mount)
 bash "$SKILL" \
   --data="https://example.com" \
-  --save-to="assets/images/default/300x300_000000_ffffff_default.png"
+  --save-to="output/default/300x300_000000_ffffff_default.png"
 
 # Docker: natural colour names, rounded style
 bash "$SKILL" \
@@ -367,10 +382,10 @@ bash "$SKILL" \
   --dotsOptions.type=rounded \
   --dots-color="royal blue" \
   --bg-color="cream" \
-  --save-to="assets/images/default/300x300_royalblue_cream_default.png" \
+  --save-to="output/default/300x300_royalblue_cream_default.png" \
   --border=10 --margin=10
 
-# Docker: with a logo (bumps error correction to H automatically)
+# Docker: with a logo -- URL passed straight through, no pre-fetch needed
 bash "$SKILL" \
   --data="https://example.com" \
   --dotsOptions.type=extra-rounded \
@@ -382,22 +397,23 @@ bash "$SKILL" \
   --image="https://example.com/logo.svg" \
   --imageOptions.crossOrigin=anonymous \
   --imageOptions.margin=10 \
-  --format=png --width=500 --height=500
+  --format=png --width=500 --height=500 \
+  --save-to="output/default/500x500_midnightblue_ivory_default.png"
 
-# Node (no Docker): direct python3 -m qr_cli call
-python3 -m qr_cli --backend=node \
+# Node (no Docker): via qr-skill.sh with --backend=node
+bash "$SKILL" --backend=node \
   --data="https://example.com" \
   --format=webp \
   --dotsOptions.type=rounded \
   --border=10 \
-  --save-to="assets/images/default/300x300_000000_ffffff_default.webp"
+  --save-to="output/default/300x300_000000_ffffff_default.webp"
 
 # Node (no Docker): bootstrap first if needed, then generate
 bash ./.claude/skills/qr/scripts/bootstrap_node_backend.sh
-python3 -m qr_cli --backend=node \
+bash "$SKILL" --backend=node \
   --data="https://example.com" \
   --format=png \
-  --save-to="assets/images/default/300x300_000000_ffffff_default.png"
+  --save-to="output/default/300x300_000000_ffffff_default.png"
 ```
 
 ## What to report after generation
@@ -409,7 +425,7 @@ clickable; `file://` URIs are NOT clickable in the VS Code markdown renderer.
 ```
 QR code generated and saved.
 
-  Saved to:    [assets/images/default/300x300_0504aa_ffffc2_default.png](assets/images/default/300x300_0504aa_ffffc2_default.png)
+  Saved to:    [output/default/300x300_0504aa_ffffc2_default.png](output/default/300x300_0504aa_ffffc2_default.png)
   Format:      PNG  (300x300 px, 14.2 KB)
   Dots:        rounded  #0504aa  (royal blue)
   Background:  #ffffc2  (cream)
@@ -424,13 +440,12 @@ Always append a fenced code block after the summary so the user can copy the
 
 ````
 ```
-open assets/images/default/300x300_0504aa_ffffc2_default.png
+open output/default/300x300_0504aa_ffffc2_default.png
 ```
 ````
 
-Use `_skill.saved_to` from the JSON result as the path (Docker path), or the
-`--save-to` value you passed (Node path, since `_skill.saved_to` is set by
-python3 -m qr_cli when `--save-to` is provided).
+Use `_skill.saved_to` from the JSON result as the path (set by the wrapper for
+both Docker and Node backends when `--save-to` is provided).
 
 Rules for the link:
 

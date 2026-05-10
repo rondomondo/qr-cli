@@ -374,6 +374,19 @@ echo '{
 
 ### Save the image to disk
 
+Mount a local directory as `/output` and pass `--save-to` to write directly to it -- no base64 decode step needed:
+
+```bash
+mkdir -p output
+docker run --rm \
+  -v "$(pwd)/output:/output" \
+  rondomondo/qr-cli:latest \
+  --data="https://example.com" \
+  --save-to=/output/qr.png
+```
+
+Or decode the base64 from JSON if you prefer the pipe approach:
+
 ```bash
 docker run --rm rondomondo/qr-cli:latest --data="https://example.com" \
   | jq -r '.image.base64' \
@@ -501,12 +514,16 @@ Colours, dot styles, sizes, and logos are all described in plain English:
 1. Parses your intent (colour names, style keywords, size, format, logo URL).
 2. Resolves ~30K English colour names to hex via `colourmapper`.
 3. Calls `scripts/qr-skill.sh`, which wraps the Docker image.
-4. Saves the image to `assets/images/{project}/{width}x{height}_{dots}_{bg}_{project}.{format}`.
-5. Reports a summary with a clickable link and a fenced `open` command you can
+4. **Docker backend:** mounts `./output` into the container and passes `--save-to` so the
+   image is written directly to disk -- no base64 decode on the host. Logo URLs are passed
+   straight through (no pre-fetch needed when running locally).
+   **Node backend (no Docker):** calls `python3 -m qr_cli --backend=node` with `--save-to`.
+5. Saves the image to `output/{project}/{width}x{height}_{dots}_{bg}_{project}.{format}`.
+6. Reports a summary with a clickable link and a fenced `open` command you can
    copy straight from the VS Code copy button:
 
 ```
-open assets/images/default/600x600_175ef0_e0e0e0_default.png
+open output/default/600x600_175ef0_e0e0e0_default.png
 ```
 
 Raw flags also pass straight through, so you can mix natural language and
