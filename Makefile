@@ -84,8 +84,7 @@ skill-install: ## Install the /qr skill into ~/.claude/skills/qr/ with Python fa
 	@mkdir -p ~/.claude/skills/qr 2> /dev/null
 	@chmod +x  .claude/skills/qr/scripts/*
 	@/bin/cp -R .claude/skills/qr ~/.claude/skills/
-	@pip install -i https://pypi.org/simple/ colourmapper-dev
-	@pip install -e ".[colour]"
+	@pip install -e "."
 	@printf "$(GREEN)Installed .claude/skills/qr  -> ~/.claude/skills/qr$(RESET)\n"
 	@printf "$(CYAN)Python fallback (Node backend) available via: python3 -m qr_cli$(RESET)\n"
 
@@ -105,8 +104,8 @@ doctor: ## Show environment info useful for bug reports
 	@printf "  skill installed:"; [ -d ~/.claude/skills/qr ] && printf " $(GREEN)yes$(RESET)\n" || printf " $(YELLOW)no (run make skill-install)$(RESET)\n"
 	@echo ""
 
-py-install: venv ## Install qr-cli-py in editable mode (Docker primary, Node fallback)
-	$(PIP) install -e ".[colour,dev]"
+py-install: venv ## Install qr-cli in editable mode (Docker primary, Node fallback)
+	$(PIP) install -e ".[dev]"
 
 py-install-node: py-install ## Pre-install bundled Node deps for the Node backend fallback
 	$(VENV)/bin/python -m qr_cli --install
@@ -126,7 +125,7 @@ py-publish: py-build ## Upload release to PyPI
 py-publish-test: py-build ## Upload release to TestPyPI
 	$(VENV)/bin/twine upload --repository testpypi dist/*
 
-py-check-backend: py-install ## Report which backend qr-cli-py will use in this environment
+py-check-backend: py-install ## Report which backend qr-cli will use in this environment
 	@$(VENV)/bin/python -c "from qr_cli.backends import get_backend; b = get_backend(); print('backend:', b.name)"
 
 clean: ## Remove Docker image, build artifacts, caches, and temp files

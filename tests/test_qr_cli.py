@@ -1,7 +1,7 @@
 """
 tests/test_qr_cli.py
 ~~~~~~~~~~~~~~~~~~~~
-Basic tests for qr-cli-py.
+Basic tests for qr-cli.
 
 Run with: pytest tests/ -v
 """
